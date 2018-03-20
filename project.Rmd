@@ -1,0 +1,587 @@
+---
+title: "Cost Estimation of Houses using Regression"
+author: "BlueGene"
+date: "November 26, 2017"
+output: html_document
+---
+
+
+```{r housing}
+load.libraries <- c('data.table', 'testthat', 'gridExtra', 'corrplot', 'GGally', 'ggplot2', 'e1071','plyr', 'dplyr', 'dummies','car','reshape2')
+install.lib <- load.libraries[!load.libraries %in% installed.packages()]
+for(libs in install.lib) install.packages(libs, dependences = TRUE)
+sapply(load.libraries, require, character = TRUE)
+
+
+
+
+
+```
+
+
+```{r, echo = FALSE}
+train <- fread('d:/data/train.csv',colClasses=c('MiscFeature' = "character", 'PoolQC' = 'character', 'Alley' = 'character'))
+test <- fread('d:/data/test.csv' ,colClasses=c('MiscFeature' = "character", 'PoolQC' = 'character', 'Alley' = 'character'))
+alldata = rbind(subset(train, select = -c(SalePrice) ),test)
+``` 
+```{r}
+cat_var <- names(train)[which(sapply(train, is.character))]
+cat_car <- c(cat_var, 'BedroomAbvGr', 'HalfBath', ' KitchenAbvGr','BsmtFullBath', 'BsmtHalfBath', 'MSSubClass')
+numeric_var <- names(train)[which(sapply(train, is.numeric))]
+```
+
+## Structure of the data
+
+```{r structure}
+dim(train)
+str(train)
+
+```
+
+
+# Summarize the missing values in the data.
+
+
+```{r missing data}
+head(train)
+colSums(sapply(train, is.na))
+colSums(sapply(train[,.SD, .SDcols = cat_var], is.na))
+colSums(sapply(train[,.SD, .SDcols = numeric_var], is.na))
+
+```
+
+
+Let's gain some insight on the number of houses that were remodeled. According to the data dictionary, if the YearBuilt date is different from the YearRemodAdd date then the house was remodeled. Comparing these two rows indicates that 696 houses were remodeled and 764 houses were not remodeled.
+
+
+
+```{r}
+sum(train[,'YearRemodAdd', with = FALSE] != train[,'YearBuilt', with = FALSE])
+cat('Percentage of houses remodeled',sum(train[,'YearRemodAdd', with = FALSE] != train[,'YearBuilt', with = FALSE])/ dim(train)[1])
+train %>% select(YearBuilt, YearRemodAdd) %>%    mutate(Remodeled = as.integer(YearBuilt != YearRemodAdd)) %>% ggplot(aes(x= factor(x = Remodeled, labels = c( 'No','Yes')))) + geom_bar() + xlab('Remodeled') + theme_light()
+
+```
+
+## Summarize the numeric values and the structure of the data.
+
+```{r traistructures}
+
+summary(train[,.SD, .SDcols =numeric_var])
+
+cat('Train has', dim(train)[1], 'rows and', dim(train)[2], 'columns.')
+cat('Test has', dim(test)[1], 'rows and', dim(test)[2], ' columns.')
+
+```
+
+
+```{r}
+# The percentage of data missing in train.
+sum(is.na(train)) / (nrow(train) *ncol(train))
+
+# The percentage of data missing in test.
+sum(is.na(test)) / (nrow(test) * ncol(test))
+
+
+```
+
+
+
+
+
+
+```{r}
+# Check for duplicated rows.
+
+cat("The number of duplicated rows are", nrow(train) - nrow(unique(train)))
+
+####Convert character to factors 
+
+train[,(cat_var) := lapply(.SD, as.factor), .SDcols = cat_var]
+
+
+
+
+```
+
+```{r}
+train_cat <- train[,.SD, .SDcols = cat_var]
+train_cont <- train[,.SD,.SDcols = numeric_var]
+
+plotHist <- function(data_in, i) {
+  data <- data.frame(x=data_in[[i]])
+  p <- ggplot(data=data, aes(x=factor(x))) + stat_count() + xlab(colnames(data_in)[i]) + theme_light() + 
+    theme(axis.text.x = element_text(angle = 90, hjust =1))
+  return (p)
+}
+
+doPlots <- function(data_in, fun, ii, ncol=3) {
+  pp <- list()
+  for (i in ii) {
+    p <- fun(data_in=data_in, i=i)
+    pp <- c(pp, list(p))
+  }
+  do.call("grid.arrange", c(pp, ncol=ncol))
+}
+
+
+plotDen <- function(data_in, i){
+  data <- data.frame(x=data_in[[i]], SalePrice = data_in$SalePrice)
+  p <- ggplot(data= data) + geom_line(aes(x = x), stat = 'density', size = 1,alpha = 1.0) +
+    xlab(paste0((colnames(data_in)[i]), '\n', 'Skewness: ',round(skewness(data_in[[i]], na.rm = TRUE), 2))) + theme_light() 
+  return(p)
+   
+}
+
+
+```
+
+
+## Barplots for the categorical features
+
+```{r categorical}
+doPlots(train_cat, fun = plotHist, ii = 1:4, ncol = 2)
+doPlots(train_cat, fun = plotHist, ii  = 4:8, ncol = 2)
+doPlots(train_cat, fun = plotHist, ii = 8:12, ncol = 2)
+doPlots(train_cat, fun = plotHist, ii = 13:18, ncol = 2)
+doPlots(train_cat, fun = plotHist, ii = 18:22, ncol = 2)
+
+```
+
+
+```{r}
+train %>% select(LandSlope, Neighborhood, SalePrice) %>% filter(LandSlope == c('Sev', 'Mod')) %>% arrange(Neighborhood) %>% group_by(Neighborhood, LandSlope) %>% summarize(Count = n()) %>% ggplot(aes(Neighborhood, Count)) + geom_bar(aes(fill = LandSlope), position = 'dodge', stat = 'identity') + theme_light() +theme(axis.text.x = element_text(angle = 90, hjust =1))
+
+```
+
+
+```{r}
+train %>% select(Neighborhood, SalePrice) %>% ggplot(aes(factor(Neighborhood), SalePrice)) + geom_boxplot() + theme(axis.text.x = element_text(angle = 90, hjust =1)) + xlab('Neighborhoods')
+
+```
+
+
+
+
+## Density plots for numeric variables.
+
+```{r numeric}
+
+doPlots(train_cont, fun = plotDen, ii = 2:6, ncol = 2)
+doPlots(train_cont, fun = plotDen, ii = 7:12, ncol = 2)
+doPlots(train_cont, fun = plotDen, ii = 13:17, ncol = 2)
+
+```
+
+
+```{r}
+doPlots(train_cont, fun = plotHist, ii = 18:23, ncol = 2)
+
+```
+
+## Explore the correlation
+```{r, fig.height= 10, fig.width= 10}
+correlations <- cor(na.omit(train_cont[,-1, with = FALSE]))
+
+# correlations
+row_indic <- apply(correlations, 1, function(x) sum(x > 0.3 | x < -0.3) > 1)
+
+correlations<- correlations[row_indic ,row_indic ]
+corrplot(correlations, method="square")
+
+
+
+
+```
+
+
+
+## Plot scatter plot for variables that have high correlation.
+
+```{r}
+train %>% select(OverallCond, YearBuilt) %>% ggplot(aes(factor(OverallCond),YearBuilt)) + geom_boxplot() + xlab('Overall Condition')
+
+```
+
+
+##Sactter plot for highly correlated variables
+```{r}
+
+plotCorr <- function(data_in, i){
+  data <- data.frame(x = data_in[[i]], SalePrice = data_in$SalePrice)
+  p <- ggplot(data, aes(x = x, y = SalePrice)) + geom_point(shape = 1, na.rm = TRUE) + geom_smooth(method = lm ) + xlab(paste0(colnames(data_in)[i], '\n', 'R-Squared: ', round(cor(data_in[[i]], data$SalePrice, use = 'complete.obs'), 2))) + theme_light()
+  return(suppressWarnings(p))
+}
+
+
+highcorr <- c(names(correlations[,'SalePrice'])[which(correlations[,'SalePrice'] > 0.5)], names(correlations[,'SalePrice'])[which(correlations[,'SalePrice'] < -0.2)])
+ 
+data_corr <- train[,highcorr, with = FALSE]
+
+
+doPlots(data_corr, fun = plotCorr, ii = 1:6)
+
+doPlots(data_corr, fun = plotCorr, ii = 6:11)
+
+
+```
+
+```{r}
+#function to impute missing values in categorical values columns
+Impute_cat = function(x){
+  temp = is.na(x)
+  a = x[temp==FALSE]
+  uniqv <- unique(a)
+  mod = uniqv[which.max(tabulate(match(a, uniqv)))]
+  x[temp] = mod
+  return(x) 
+}
+
+```
+
+## Imputing missing values
+```{r}
+
+alldata$GarageQual = Impute_cat(alldata$GarageQual)
+alldata$GarageCond = Impute_cat(alldata$GarageCond)
+alldata$GarageFinish = Impute_cat(alldata$GarageFinish)
+k =  alldata$GarageYrBlt
+k[is.na(alldata$GarageYrBlt)] = median(alldata$GarageYrBlt,na.rm = TRUE)
+alldata$GarageYrBlt = k
+
+w = data.frame(Neighborhood = alldata$Neighborhood, LotArea = alldata$LotArea)
+w = w %>% group_by(Neighborhood) %>% summarise(LotArea = median(LotArea,na.rm = TRUE))
+group = data.frame(Neighborhood = w$Neighborhood, LotArea = w$LotArea)
+for(i in 1:nrow(alldata))
+{
+  if(is.na(alldata$LotArea[i]))
+  {
+    for(j in 1:nrow(group))
+    {
+      if(group$Neighborhood[j] == alldata$Neighborhood[i])
+      {
+        alldata$LotArea[i] = group$LotArea[j]
+      }
+    }
+  }
+}
+missing = function(k)
+{
+    k[is.na(k)] = 0
+    return(k)
+}
+
+alldata$MasVnrArea = missing(alldata$MasVnrArea)
+alldata$BsmtFinSF1 = missing(alldata$BsmtFinSF1)
+alldata$BsmtFinSF2 = missing(alldata$BsmtFinSF2)
+alldata$BsmtUnfSF = missing(alldata$BsmtUnfSF)
+alldata$TotalBsmtSF = missing(alldata$TotalBsmtSF)
+alldata$GarageArea = missing(alldata$GarageArea)
+alldata$BsmtFullBath = missing(alldata$BsmtFullBath)
+alldata$BsmtHalfBath = missing(alldata$BsmtHalfBath)
+alldata$GarageCars = missing(alldata$GarageCars)
+alldata$GarageYrBlt = missing(alldata$GarageYrBlt)
+alldata$PoolArea = missing(alldata$PoolArea)
+alldata$LotFrontage = missing(alldata$LotFrontage)
+
+alldata$BsmtQual = as.integer(factor(alldata$BsmtQual, levels=c("Po", "Fa", "TA", "Gd","Ex")))
+alldata$BsmtQual[is.na(alldata$BsmtQual)] = 0
+
+alldata$ExterQual = as.integer(factor(alldata$ExterQual, levels=c("Po", "Fa", "TA", "Gd","Ex")))
+alldata$ExterQual[is.na(alldata$ExterQual)] = 0
+
+alldata$PoolQC = as.integer(factor(alldata$PoolQC, levels=c("Po", "Fa", "TA", "Gd","Ex")))
+alldata$PoolQC[is.na(alldata$PoolQC)] = 0
+
+alldata$ExterCond = as.integer(factor(alldata$ExterCond, levels=c("Po", "Fa", "TA", "Gd","Ex")))
+alldata$ExterCond[is.na(alldata$ExterCond)] = 0
+
+alldata$BsmtCond = as.integer(factor(alldata$BsmtCond, levels=c("Po", "Fa", "TA", "Gd","Ex")))
+alldata$BsmtCond[is.na(alldata$BsmtCond)] = 0
+
+alldata$HeatingQC = as.integer(factor(alldata$HeatingQC, levels=c("Po", "Fa", "TA", "Gd","Ex")))
+alldata$HeatingQC[is.na(alldata$HeatingQC)] = 0
+
+alldata$KitchenQual = as.integer(factor(alldata$KitchenQual, levels=c("Po", "Fa", "TA", "Gd","Ex")))
+alldata$KitchenQual[is.na(alldata$KitchenQual)] = 0
+
+alldata$FireplaceQu = as.integer(factor(alldata$FireplaceQu, levels=c("Po", "Fa", "TA", "Gd","Ex")))
+alldata$FireplaceQu[is.na(alldata$FireplaceQu)] = 0
+
+alldata$GarageQual = as.integer(factor(alldata$GarageQual, levels=c("Po", "Fa", "TA", "Gd","Ex")))
+alldata$GarageQual[is.na(alldata$GarageQual)] = 0
+
+alldata$GarageCond = as.integer(factor(alldata$GarageCond, levels=c("Po", "Fa", "TA", "Gd","Ex")))
+alldata$GarageCond[is.na(alldata$GarageCond)] = 0
+
+alldata$BsmtExposure = as.integer(factor(alldata$BsmtExposure, levels=c("No", "Mn", "Av", "Gd")))
+alldata$BsmtExposure[is.na(alldata$BsmtExposure)] = 0
+
+alldata$BsmtFinType1 = as.integer(factor(alldata$BsmtFinType1, levels=c("Unf", "LwQ", "Rec", "BLQ", "ALQ", "GLQ")))
+alldata$BsmtFinType1[is.na(alldata$BsmtFinType1)] = 0
+
+alldata$BsmtFinType2 = as.integer(factor(alldata$BsmtFinType2, levels=c("Unf", "LwQ", "Rec", "BLQ", "ALQ", "GLQ")))
+alldata$BsmtFinType2[is.na(alldata$BsmtFinType2)] = 0
+
+alldata$GarageFinish = as.integer(factor(alldata$GarageFinish, levels=c("Unf", "RFn", "Fin")))
+alldata$GarageFinish[is.na(alldata$GarageFinish)] = 0
+
+alldata$Fence = as.integer(factor(alldata$Fence, levels=c("MnWw", "GdWo", "MnPrv", "GdPrv")))
+alldata$Fence[is.na(alldata$Fence)] = 0
+
+alldata$CentralAir[alldata$CentralAir == 'Y'] = 1
+alldata$CentralAir[alldata$CentralAir == 'N'] = 0
+alldata$CentralAir = strtoi(alldata$CentralAir)
+
+alldata$PavedDrive[alldata$PavedDrive == 'Y'] = 1
+alldata$PavedDrive[alldata$PavedDrive == 'N'] = 0
+alldata$PavedDrive = strtoi(alldata$PavedDrive)
+
+abc = alldata$Neighborhood
+  abc[abc=='MeadowV']=0
+ abc[abc=="IDOTRR"]=1 
+ abc[abc=="BrDale"]=1 
+ abc[abc=="OldTown"]=1 
+ abc[abc=="Edwards"]=1 
+ abc[abc=="BrkSide"]=1 
+ abc[abc=="Sawyer"]=1 
+ abc[abc=="Blueste"]=1
+ abc[abc== 'SWISU']=2 
+ abc[abc == 'NAmes']=2
+ abc[abc == 'NPkVill']=2 
+ abc[abc == 'Mitchel']=2 
+ abc[abc == 'SawyerW']=2
+ abc[abc == 'Gilbert']=2 
+ abc[abc == 'NWAmes']=2 
+ abc[abc == 'Blmngtn']=2 
+ abc[abc == 'CollgCr']=2
+  
+  abc[abc == 'ClearCr']=3 
+  abc[abc == 'Crawfor']=3 
+  abc[abc == 'Veenker']=3
+  abc[abc == 'Somerst']=3
+  abc[abc == 'Timber']=3
+  
+  abc[abc == 'StoneBr']=4
+  abc[abc == 'NoRidge']=4 
+  abc[abc == 'NridgHt']=4
+  
+
+alldata$Neighborhood = abc
+alldata$Neighborhood = strtoi(alldata$Neighborhood)
+
+```
+
+## one hot-encoding of categorical or numeric_categorical variables.
+```{r}
+
+alldata$BsmtQual[is.na(alldata$BsmtQual)] = "None"
+alldata <- dummy.data.frame(alldata, names=c('BsmtQual'), sep="_")
+alldata$MSSubClass[is.na(alldata$MSSubClass)] = 'None'
+alldata <- dummy.data.frame(alldata, names=c('MSSubClass'), sep="_")
+alldata$MSZoning[is.na(alldata$MSZoning)] = "RL"
+alldata <- dummy.data.frame(alldata, names=c('MSZoning'), sep="_")
+alldata$LotConfig[is.na(alldata$LotConfig)] = "RL"
+alldata <- dummy.data.frame(alldata, names=c('LotConfig'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('Neighborhood'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('Condition1'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('BldgType'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('HouseStyle'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('RoofStyle'), sep="_")
+alldata$Exterior1st[is.na(alldata$Exterior1st)] = "VinylSd"
+alldata <- dummy.data.frame(alldata, names=c('Exterior1st'), sep="_")
+alldata$Exterior2nd[is.na(alldata$Exterior2nd)] = "VinylSd"
+alldata <- dummy.data.frame(alldata, names=c('Exterior2nd'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('Foundation'), sep="_")
+alldata$SaleType[is.na(alldata$SaleType)] = "WD"
+alldata <- dummy.data.frame(alldata, names=c('SaleType'), sep="_")
+alldata$SaleCondition[is.na(alldata$SaleCondition)] = "Normal"
+alldata <- dummy.data.frame(alldata, names=c('SaleCondition'), sep="_")
+
+ru = alldata$MasVnrArea != 0
+re = is.na(alldata$MasVnrType)
+tas = ru & re
+alldata$MasVnrType[tas] = "BrkFace"
+alldata <- dummy.data.frame(alldata, names=c('MasVnrType'), sep="_")
+
+alldata$Electrical[is.na(alldata$Electrical)] = "SBrkr"
+alldata <- dummy.data.frame(alldata, names=c('Electrical'), sep="_")
+
+alldata$KitchenQual[is.na(alldata$KitchenQual)] =  "TA"
+alldata <- dummy.data.frame(alldata, names=c('KitchenQual'), sep="_")
+
+alldata$Functional[is.na(alldata$Functional)] =   "Typ"
+alldata <- dummy.data.frame(alldata, names=c('Functional'), sep="_")
+
+
+
+alldata <- dummy.data.frame(alldata, names=c('LotShape'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('LandContour'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('LandSlope'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('GarageType'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('PavedDrive'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('MiscFeature'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('Street'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('Alley'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('Condition2'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('RoofMatl'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('Heating'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('ExterQual'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('ExterCond'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('BsmtQual'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('BsmtCond'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('HeatingQC'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('FireplaceQu'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('GarageQual'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('GarageCond'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('PoolQC'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('BsmtExposure'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('BsmtFinType1'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('BsmtFinType2'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('GarageFinish'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('Fence'), sep="_")
+alldata <- dummy.data.frame(alldata, names=c('MoSold'), sep="_")
+
+aa = alldata$GarageYrBlt
+aa[aa>1870 & aa<1891] = '1871-90'
+aa[aa>1890 & aa<1911] = '1891-10'
+aa[aa>1910 & aa<1931] = '1911-30'
+aa[aa>1930 & aa<1951] = '1931-50'
+aa[aa>1950 & aa<1971] = '1951-70'
+aa[aa>1970 & aa<1991] = '1971-90'
+aa[aa>1990 & aa<2011] = '1991-10'
+aa[2593] = '1991-10'
+alldata$GarageYrBlt = aa
+alldata <- dummy.data.frame(alldata, names=c('GarageYrBlt'), sep="_")
+
+aa = alldata$YearBuilt
+aa[aa>1870 & aa<1891] = '1871-90'
+aa[aa>1890 & aa<1911] = '1891-10'
+aa[aa>1910 & aa<1931] = '1911-30'
+aa[aa>1930 & aa<1951] = '1931-50'
+aa[aa>1950 & aa<1971] = '1951-70'
+aa[aa>1970 & aa<1991] = '1971-90'
+aa[aa>1990 & aa<2011] = '1991-10'
+alldata$YearBuilt = aa
+alldata <- dummy.data.frame(alldata, names=c('YearBuilt'), sep="_")
+
+aa = alldata$YearRemodAdd
+aa[aa>1870 & aa<1891] = '1871-90'
+aa[aa>1890 & aa<1911] = '1891-10'
+aa[aa>1910 & aa<1931] = '1911-30'
+aa[aa>1930 & aa<1951] = '1931-50'
+aa[aa>1950 & aa<1971] = '1951-70'
+aa[aa>1970 & aa<1991] = '1971-90'
+aa[aa>1990 & aa<2011] = '1991-10'
+alldata$YearRemodAdd = aa
+alldata <- dummy.data.frame(alldata, names=c('YearRemodAdd'), sep="_")
+
+er <- data.frame('YrSold_1991-10' = rep(1,2919))
+alldata = cbind(alldata,er)
+
+alldata <- dummy.data.frame(alldata, names=c('Utilities'), sep="_")
+
+```
+## remove skewness of numeric variables
+```{r}
+
+
+alldata$LotArea = log1p(alldata$LotArea)
+alldata$BsmtFinSF1 = log1p(alldata$BsmtFinSF2)
+alldata$BsmtFinSF2 = log1p(alldata$BsmtFinSF2)
+alldata$BsmtUnfSF = log1p(alldata$BsmtUnfSF)
+alldata$TotalBsmtSF = log1p(alldata$TotalBsmtSF)
+alldata$X1stFlrSF = log1p(alldata$X1stFlrSF)
+alldata$X2ndFlrSF = log1p(alldata$X2ndFlrSF)
+alldata$LowQualFinSF = log1p(alldata$LowQualFinSF)
+alldata$GrLivArea = log1p(alldata$GrLivArea)
+alldata$BsmtHalfBath = log1p(alldata$BsmtHalfBath)
+alldata$KitchenAbvGr = log1p(alldata$KitchenAbvGr)
+alldata$WoodDeckSF = log1p(alldata$WoodDeckSF)
+alldata$OpenPorchSF = log1p(alldata$OpenPorchSF)
+alldata$EnclosedPorch = log1p(alldata$EnclosedPorch)
+alldata$X3SsnPorch = log1p(alldata$X3SsnPorch)
+alldata$ScreenPorch = log1p(alldata$ScreenPorch)
+alldata$PoolArea = log1p(alldata$PoolArea)
+alldata$MiscVal = log1p(alldata$MiscVal)
+
+
+
+```
+
+## implement algorithm
+```{r}
+
+alldata$Id = NULL
+alldata_train = alldata[1:1460,]
+alldata_test = alldata[1461:2919,]
+er = data.frame('SalePrice'=train_cont$SalePrice)
+alldata_train = cbind(alldata_train,er)
+alldata_train$SalePrice = log1p(alldata_train$SalePrice)
+model = lm(SalePrice~., data = alldata_train)
+
+dg = summary(model)
+nn = names(dg$coefficients[,1])
+mn = dg$coefficients[,4]
+mn = unname(mn)
+mydata = data.frame('features'=nn,'p_value'=mn)
+nam = mydata$features
+
+equation = paste(nam[2:length(nam)],collapse = '+')
+regression_formula <- as.formula(paste('SalePrice', equation, sep=" ~ "))
+fit = lm(regression_formula,data=alldata_train)
+# Calculating VIF for each independent variable
+# vif(fit)
+
+#Set a VIF threshold. All the variables having higher VIF than threshold
+#are dropped from the model
+
+threshold=2.5
+
+#Sequentially drop the variable with the largest VIF until
+#all variables have VIF less than threshold
+drop=TRUE
+
+aftervif=data.frame()
+while(drop==TRUE)
+  {
+  vfit=vif(fit)
+  aftervif= rbind.fill(aftervif,as.data.frame(t(vfit)))
+  if(max(vfit)>threshold) { 
+    fit = update(fit,as.formula(paste(".","~",".","-",names(which.max(vfit))))) }
+  else 
+  { 
+      drop=FALSE
+  }
+}
+
+jkl = names(fit$coefficients)
+eq = paste(jkl[2:length(jkl)],collapse = '+')
+regression_formula <- as.formula(paste('SalePrice', eq, sep=" ~ "))
+mod = lm(regression_formula,data=alldata_train)
+
+#print(summary(mod))
+
+
+
+
+
+mydata = summary(mod)
+mydata = mydata$coefficients
+name = names(mydata[,1])
+mydata = mydata[,4]
+name = names(mydata[mydata<0.05])
+eq = paste(name[2:length(name)],collapse = '+')
+regression_formula <- as.formula(paste('SalePrice', eq, sep=" ~ "))
+mod = lm(regression_formula,data=alldata_train)
+
+print(summary(mod))
+
+library(Metrics)
+
+
+
+```
+
+
+
+
